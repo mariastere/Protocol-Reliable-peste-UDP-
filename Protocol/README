@@ -1,0 +1,27 @@
+SUBIECTUL 1:
+    In implementarea mea, pentru stabilirea conexiunii intre client si server am folosit un mecanism de tip Three-Way Handshake peste UDP. Cand clientul doreste sa
+        inceapa comunicarea, in functia setup_connection trimite un pachet de control de tip SYN, avand campul type = 1. Serverul asteapta acest pachet blocandu-se
+        in functia wait4connect si, la primire, raspunde cu un pachet de tip SYN-ACK (type = 2), in care ii transmite si dimensiunea ferestrei de receptie initiale
+        (recv_window). Clientul finalizeaza handshake-ul trimitand inapoi un pachet ACK (type = 3), moment in care conexiunea este considerata stabilita. Pentru a
+        retine datele si a proteja regiunile critice dintre thread-uri cu mutex-uri, starea conexiunii este salvata pe ambele parti intr-o structura dedicata,
+        gestionata cu ajutorul unui map pe baza unui id unic.
+
+SUBIECTUL 2:
+    Pentru transmiterea propriu-zisa a fisierelor (fie ele text sau imagini din cerinta), folosesc un mecanism de reordonare a pachetelor la receptie. Cand aplicatia
+        apeleaza send_data, verific intai daca am spatiu in fereastra glisanta, calculand cate pachete sunt momentan "in zbor". Daca este spatiu, copiez datele,
+        generez un header de tip poli_tcp_data_hdr cu numarul de secventa corespunzator si salvez o copie a intregului segment intr-un map auxiliar (unacked_packets)
+        inainte de a-l trimite pe fir. La receptie, in receiver_handler, cand primesc un pachet cu date, ii verific numarul de secventa. Daca este exact pachetul pe
+        care il astept in acel moment (diferenta 0 fata de expected_seq_num), il copiez direct in buffer-ul mare (recv_buffer) la pozitia de scriere curenta. Imediat 
+        dupa ce am adaugat un pachet la locatia corecta, parcurg map-ul meu in care am salvat pachete venite in avans (out_of_order_packets) si verific daca exista
+        pachetul urmator; daca da, il scriu si pe acela in buffer. Daca pachetul abia sosit este in avans (diferenta > 0), nu ii dau drop, ci il salvez direct in map-ul
+        out_of_order_packets pentru a fi extras automat la pasul descris mai sus, odata ce secventele anterioare vor primi confirmare.
+
+SUBIECTUL 3:
+    Pentru a functiona corect pe legaturi cu rate de pierdere de pachete arbitrare si pentru a folosi link-ul la capacitate optima, protocolul meu asigura atat controlul
+        fluxului (flow control), cat si mecanismul de retransmisie (timeout). Pe masura ce serverul extrage date sau cand aplicatia citeste direct din recv_buffer
+        folosind recv_data, trimit inapoi un pachet de control de tip ACK (type = 5) catre sender. In acest pachet recalculez campul recv_window pentru a anunta exact
+        cat spatiu de stocare mai are serverul disponibil. Pentru detectarea pierderilor pe retea, ma folosesc de un timer creat cu timerfd_create asociat file
+        descriptorilor, peste care apelez poll() in functia recv_message_or_timeout. Daca un timer expira inainte sa primesc un ACK, functia mea de multiplexare va
+        returna valoarea -1. In acel moment, sender_handler reactioneaza parcurgand tot map-ul cu pachete trimise dar inca neconfirmate (unacked_packets) si
+        retransmite segmentele respective. Odata ce ACK-urile corecte ajung, sterg manual pachetele confirmate din map, avansand baza ferestrei. Asigur astfel ca
+        atat fisierele mari, cat si imaginile, se vor transfera integral pana la EOF.
